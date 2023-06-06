@@ -1,0 +1,404 @@
+---
+title: "Regression"
+output:
+  html_document: default
+  pdf_document: default
+date: "2022-12-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/albertjoe33/Documents/UT Austin/Stat Applications/Project/")
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(mosaic)
+library(patchwork)
+library(mgcv)
+#library(plotly)
+#library(GGally)
+```
+
+```{r, include=FALSE}
+#Load Dataset
+df_listings <- read_csv("Data/austin_airbnb_clean.csv")
+
+#Does not display numbers in scientific notation
+options(scipen = 999)
+```
+
+
+WHY WE ARE USING LOG(PRICE):
+
+From the plots, we see that taking the log of price makes its distribution alot closer to normal. Furthermore, when running MLR, we noticed that using log(price) increased our r.squared value by about 0.1. To make our code clean, we will only show models with the dependent variable as log(price).
+
+```{r}
+hist_price = ggplot(df_listings) + 
+  geom_histogram(aes(x = price, y=..density..), bins=75) +
+  stat_function(fun = dnorm, args = list(mean = mean(df_listings$price), sd = sd(df_listings$price)), col = 'blue')
+
+hist_log_price = ggplot(df_listings) + 
+  geom_histogram(aes(x = log(price), y=..density..), bins=75) +
+  stat_function(fun = dnorm, args = list(mean = mean(log(df_listings$price)), sd = sd(log(df_listings$price))), col = 'blue')
+
+hist_price / hist_log_price
+```
+
+```{r}
+qqnorm(df_listings$price) 
+qqline(df_listings$price, col='steelblue')
+
+qqnorm(log(df_listings$price))
+qqline(log(df_listings$price), col='steelblue')
+```
+
+
+DATA CLEANING AND SPLITTING DATA INTO GROUPS FOR REGRESSION
+
+Data Cleaning
+```{r}
+#Make downtown a categorical variable names neighborhood
+df_listings <- df_listings %>% 
+  mutate(neighborhood = case_when(downtown == 0 ~ '_other',
+                              downtown == 1 ~ '_downtown_adjacent',
+                              downtown == 2 ~ '_downtown'))
+
+#create dummy variable whether a place has any reviews or no reviews
+df_listings <- df_listings %>% 
+  mutate(has_review = case_when(number_of_reviews == 0 ~ 0,
+                              number_of_reviews != 0 ~ 1))
+
+#Take out outliers for bedrooms and bathrooms
+df_listings <- df_listings %>% filter(bedrooms<7 & bathrooms<6.5)
+```
+
+
+Eliminate Unnecessary Variables
+```{r}
+df_listings <- df_listings %>% select(price,
+                          accommodates, bedrooms, bathrooms, neighborhood,
+                          number_of_reviews, review_scores_rating, has_review,
+                          host_identity_verified,
+                          shared_bath, pool, fireplace, jacuzzi, self_checkin, parking, 
+                          lake_access, sauna, pets_allowed, washer_dryer, gym, 
+                          property_type_clean)
+
+#note we have removed host_is_superhost as regression showed a p-value of 0.99, had no affect on the p-values of either the dependent or independent variables, and had no affect no r.squared.
+
+```
+
+
+Create subset Dataframes
+
+We will run 4 regressions on each of the 3 dataframes below:
+REG1- Simple Model
+REG2- Model with all variables
+REG3- Model with interactions
+REG4- Model with polynomials
+
+Create a Dataframe where we impute the review_score_ratings for listings without a review
+```{r}
+df_imputed_reviews <- df_listings %>% 
+  mutate(review_scores_rating = replace_na(review_scores_rating,mean(review_scores_rating, na.rm = TRUE)))
+```
+
+Create a Dataframe where listings without reviews are dropped
+```{r}
+df_has_review <- df_listings %>% filter(has_review == 1)
+```
+
+Create a Dataframe for just Houses and Apartment/Condos (and has atleast 1 review for the listing)
+```{r}
+df_normal_homes <- df_has_review %>% filter(property_type_clean == 'house' | property_type_clean== 'condo_apartment')
+
+#For normal homes, we find that ones without bathrooms are not representative of the homes we are trying to capture
+df_normal_homes <- df_normal_homes %>% filter(bathrooms!=0)
+
+#Note that we chose properties that have reviews because the models that use data that have atleast 1 review gave a better fit.
+#Our model is aimed at helping landlords price their airbnbs. 
+#It is plausible that landlords that do not have reviews are relatively new and thus may not be pricing properly. 
+#For example, they could be pricing too high and not getting any bookings and continue to adjust accordingly. 
+#As a result, we believe it may be better to use values that already have reviews to price airbnbs.
+```
+
+
+
+IMPUTED REVIEWS REGRESSION (Includes all datapoints)
+
+Simple Model 
+```{r}
+imputed_fit1 = lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms, data = df_imputed_reviews)
+summary(imputed_fit1)
+```
+
+```{r}
+imputed_boot1 = do(1000) * {
+    lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms, data = resample(df_imputed_reviews))
+}
+
+confint(imputed_boot1)
+```
+
+All Variables Model
+```{r}
+imputed_fit2 =  lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + has_review +
+                        host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_imputed_reviews)
+summary(imputed_fit2)
+```
+
+
+```{r}
+imputed_boot2 = do(1000) * {
+    lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + has_review +
+                        host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = resample(df_imputed_reviews))
+}
+
+confint(imputed_boot2)
+```
+
+Interaction Model
+```{r}
+imputed_fit3 =  lm(log(price) ~ accommodates * bedrooms + bedrooms * neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + has_review +
+                        host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_imputed_reviews)
+summary(imputed_fit3)
+```
+
+```{r}
+imputed_boot3 = do(1000) * {
+    lm(log(price) ~ accommodates * bedrooms + bedrooms * neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + has_review +
+                        host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = resample(df_imputed_reviews))
+}
+
+confint(imputed_boot3)
+```
+
+Polynomial Model
+```{r}
+imputed_fit4 =  lm(log(price) ~ poly(accommodates,3) + poly(bedrooms,3) + neighborhood + poly(bathrooms,3) +
+                        number_of_reviews + review_scores_rating + has_review +
+                        host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_imputed_reviews)
+summary(imputed_fit4)
+```
+
+
+```{r}
+imputed_boot4 = do(1000) * { 
+  lm(log(price) ~ poly(accommodates,3) + poly(bedrooms,3) + neighborhood + poly(bathrooms,3) +
+                        number_of_reviews + review_scores_rating + has_review +
+                        host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = resample(df_imputed_reviews))
+}
+
+confint(imputed_boot4)
+```
+
+
+
+HAS_REVIEWS REGRESSION (Includes only data points with reviews)
+
+Simple Model 
+```{r}
+has_review_fit1 = lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms, data = df_has_review)
+summary(has_review_fit1)
+```
+
+
+All Variables Model
+```{r}
+has_review_fit2 =  lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_has_review)
+summary(has_review_fit2)
+```
+
+
+Interaction Model
+```{r}
+has_review_fit3 =  lm(log(price) ~ accommodates * bedrooms + bedrooms * neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_has_review)
+summary(has_review_fit3)
+```
+
+
+Polynomial Model
+```{r}
+has_review_fit4 =  lm(log(price) ~ poly(accommodates,3) + poly(bedrooms,3) + neighborhood + poly(bathrooms,3) +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        shared_bath + pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_has_review)
+summary(has_review_fit4)
+```
+
+
+
+HOUSE AND APARTMENT/CONDO REGRESSION (Includes only data points that are houses and apartment/condo)
+#important to note that we are taking our variables that belong to shared rooms and private rooms etc.
+
+
+Simple Model 
+```{r}
+homes_fit1 = lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms, data = df_normal_homes)
+summary(homes_fit1)
+```
+
+
+All Variables Model
+```{r}
+homes_fit2 =  lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_normal_homes)
+summary(homes_fit2)
+```
+
+
+Interaction Model
+```{r}
+homes_fit3 =  lm(log(price) ~ accommodates * bedrooms + bedrooms * neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_normal_homes)
+summary(homes_fit3)
+```
+
+
+Polynomial Model
+```{r}
+homes_fit4 =  lm(log(price) ~ poly(accommodates,3) + poly(bedrooms,3) + neighborhood + poly(bathrooms,3) +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = df_normal_homes)
+summary(homes_fit4)
+```
+
+```{r model_validation}
+model_compare <- function(data){
+  pred_error_est = Do(10) * {
+    data_shuffle = shuffle(data)
+    # Remove the original id, we don't need it
+    data_shuffle = subset(data_shuffle, select=(-orig.id))
+    
+    # Create the 80/20 percent split:
+    n = nrow(data)
+    n_train = round(0.8*n)  # round to nearest integer
+    
+    data_train = data_shuffle[1:n_train,]
+    data_test  = data_shuffle[(n_train+1):n,]
+    
+    homes_fit1 = lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms, data = data_train)
+    homes_fit2 =  lm(log(price) ~ accommodates + bedrooms + neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = data_train)
+    homes_fit3 =  lm(log(price) ~ accommodates * bedrooms + bedrooms * neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, 
+                        data = data_train)
+    homes_fit4 =  lm(log(price) ~ poly(accommodates,3) + poly(bedrooms,3) + neighborhood + poly(bathrooms,3) +
+                          number_of_reviews + review_scores_rating + host_identity_verified +
+                          pool + fireplace + jacuzzi + self_checkin + parking + 
+                          lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                          property_type_clean, 
+                          data = data_train)
+    
+    # Stepwise models
+    lm_step = step(homes_fit4, trace=0)
+    lm_step2 = step(homes_fit1, scope = log(price) ~ accommodates * bedrooms + bedrooms * neighborhood + bathrooms +
+                        number_of_reviews + review_scores_rating + host_identity_verified +
+                        pool + fireplace + jacuzzi + self_checkin + parking + 
+                        lake_access + sauna + pets_allowed + washer_dryer + gym + 
+                        property_type_clean, data=data_train, trace=0)
+    
+    
+    yhat_test1 = predict(homes_fit1, newdata = data_test)
+    yhat_test2 = predict(homes_fit2, newdata = data_test)
+    yhat_test3 = predict(homes_fit3, newdata = data_test)
+    yhat_test4 = predict(homes_fit4, newdata = data_test)
+    yhat_test_step = predict(lm_step, newdata = data_test)
+    yhat_test_step2 = predict(lm_step2, newdata = data_test)
+    
+    c(
+      rmspe_simple = sqrt( mean( (data_test$price - exp(yhat_test1))^2 ) ),
+      rmspe_allvars = sqrt( mean( (data_test$price - exp(yhat_test2))^2 ) ),
+      rmspe_interactions = sqrt( mean( (data_test$price - exp(yhat_test3))^2 ) ),
+      rmspe_poly = sqrt( mean( (data_test$price - exp(yhat_test4))^2 ) ),
+      rmspe_step = sqrt( mean( (data_test$price - exp(yhat_test_step))^2 ) ),
+      rmspe_step2 = sqrt( mean( (data_test$price - exp(yhat_test_step2))^2 ) )
+    )
+  
+  }
+  print(lm_step)
+  print(lm_step2)
+  print(pred_error_est)
+  print(summary(pred_error_est))
+}
+
+model_compare(df_normal_homes)
+model_compare(df_has_review)
+model_compare(df_imputed_reviews)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
