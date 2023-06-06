@@ -1,0 +1,1047 @@
+---
+title: "Final Project Markdown"
+author: "Lorenzo Dube"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/albertjoe33/Documents/UT Austin/Stat Applications/Project/")
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(mosaic)
+library(patchwork)
+library(mgcv)
+library(plotly)
+library(GGally)
+```
+
+##Import Data
+
+```{r data_import}
+#Load Dataset
+
+raw_listings = read_csv('Data/austin_airbnb_listings.csv', show_col_types = FALSE)
+raw_zip = read_csv('Data/inventory_core_metrics_zip.csv', show_col_types = FALSE)
+```
+
+
+
+## Data Cleaning
+
+```{r data_cleaning}
+#Create df with relevant columns from raw data
+df_listings <- raw_listings[, c('id',
+                                'host_is_superhost',
+                                'host_identity_verified',
+                                'host_neighbourhood',
+                                'latitude',
+                                'longitude',
+                                'neighbourhood_cleansed',
+                                'property_type', 
+                                'accommodates',
+                                'bedrooms',
+                                'beds',
+                                'bathrooms_text',
+                                'number_of_reviews',
+                                'review_scores_rating',
+                                'price')]
+
+#Clean Price Column Data, remove $ and cast as numeric
+df_listings$price <- as.numeric(gsub("\\$", "", df_listings$price))
+
+#Clean Bathroom Data
+df_listings <- df_listings %>%
+  mutate(shared_bath = case_when(
+    grepl(pattern = 'shared', x = bathrooms_text, ignore.case = TRUE) ~ 1))
+df_listings$shared_bath <- replace_na(df_listings$shared_bath, replace = 0) #Replace NA values 
+
+
+df_listings <- df_listings %>% rename('bathrooms' = 'bathrooms_text')
+df_listings$bathrooms <- as.numeric(gsub("[^0-9.-]", "", df_listings$bathrooms))
+
+
+#Rename columns
+df_listings <- df_listings %>% rename('zip_code' = 'neighbourhood_cleansed',
+                                      'listing_id' = 'id')
+
+
+nrow(df_listings)
+head(df_listings)
+```
+
+##Extracting Relevant Amenities
+
+```{r }
+#Extract relevant amenities from raw data set 
+
+#Pool 
+pool <- (case_when(grepl(pattern= 'pool', x= raw_listings$amenities, ignore.case = TRUE) ~ 1))
+pool <- replace_na(pool, replace = 0)   #Replace NA values with 0
+
+#Fireplace
+fireplace <- case_when(grepl(pattern ='fireplace', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+fireplace <- replace_na(fireplace, replace = 0)
+
+#Jacuzzi 
+jacuzzi <- case_when(grepl(pattern= 'jacuzzi', x= raw_listings$amenities, ignore.case = TRUE) ~ 1,
+                      grepl(pattern= 'Hot Tub', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+jacuzzi <- replace_na(jacuzzi, replace = 0)
+
+#Self Check-in
+self_checkin <- case_when(grepl(pattern='Check-in', x= raw_listings$amenities, ignore.case = TRUE) ~ 1,
+                          grepl(pattern='Check in', x= raw_listings$amenities, ignore.case = TRUE) ~ 1,
+                          grepl(pattern='Key Pad', x= raw_listings$amenities, ignore.case = TRUE) ~ 1,
+                          grepl(pattern='Keypad', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+self_checkin <- replace_na(self_checkin, replace = 0)
+
+
+#Parking on Premises
+parking <- case_when(grepl(pattern= 'Premises', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+parking <- replace_na(parking, replace = 0)
+
+
+#Lake Access
+lake_access <- case_when(grepl(pattern='Lake access', x=raw_listings$amenities, ignore.case = TRUE) ~ 1)
+lake_access <- replace_na(lake_access, replace = 0)
+
+#Sauna
+sauna <- case_when(grepl(pattern= 'Sauna', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+sauna <- replace_na(sauna, replace = 0)
+
+#Pets Allowed
+pets_allowed <- case_when(grepl(pattern= 'Pets Allowed', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+pets_allowed <- replace_na(pets_allowed, replace = 0)
+
+#Washer & Dryer
+washer_dryer <- case_when(grepl(pattern= 'Washer', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+washer_dryer <- replace_na(washer_dryer, replace = 0)
+
+
+#Gym
+gym <- case_when(grepl(pattern= 'Gym', x= raw_listings$amenities, ignore.case = TRUE) ~ 1)
+gym <- replace_na(gym, replace = 0)
+
+amenities <- data.frame(pool, fireplace, jacuzzi, self_checkin, parking, lake_access,
+                        sauna, pets_allowed, washer_dryer, gym)
+
+
+#Bind Amenities to main dataframe
+df_listings <- cbind(df_listings, amenities)
+
+
+#Convert Boolean Values to 1 and 0
+df_listings$host_is_superhost <- as.integer(df_listings$host_is_superhost)
+df_listings$host_identity_verified <- as.integer(df_listings$host_identity_verified)
+```
+
+##Adding Zip Codes to Working Data
+
+```{r zipcode add}
+#Zip_Codes Dataframe
+df_zip <- raw_zip[, c('postal_code','median_listing_price_per_square_foot','total_listing_count' )] %>%
+  rename('median_price_SQFT' = 'median_listing_price_per_square_foot', 'zip_code' = 'postal_code')
+
+
+#Merge both dataframes
+df_listings <- merge(x=df_listings, y=df_zip, by = "zip_code", all.x = TRUE)
+
+nrow(df_listings)
+head(df_listings)
+```
+
+##Removing NA Values
+
+```{r clean_na}
+#Remove any rows with N/A values
+#df_listings <- df_listings %>% drop_na(accommodates, bathrooms, bedrooms, price, number_of_reviews, median_price_SQFT)
+#nrow(df_listings)
+
+df_listings <- df_listings %>% drop_na(accommodates, bathrooms, bedrooms, price, number_of_reviews)
+nrow(df_listings)
+```
+
+##Property Categorization Simplification
+
+```{r property categotization}
+#Categorizes property types into 7 types of properties (listed in the output)
+
+df_listings <- df_listings %>% 
+  mutate(property_type_clean = case_when(str_detect(property_type, 'Private room') ~ 'private_room',
+                                   str_detect(property_type, 'Room') ~ 'private_room',
+                                   str_detect(property_type, 'Entire guest suite') ~ 'private_room',
+                                   str_detect(property_type, 'Shared room') ~ 'shared_room',
+                                   str_detect(property_type, 'Boat') ~ 'camper_rv_boat',
+                                   str_detect(property_type, 'Camper/RV') ~ 'camper_rv_boat',
+                                   str_detect(property_type, 'Houseboat') ~ 'camper_rv_boat',
+                                   str_detect(property_type, 'Bus') ~ 'camper_rv_boat',
+                                   str_detect(property_type, 'Tent') ~ 'outdoor',
+                                   str_detect(property_type, 'Yurt') ~ 'outdoor',
+                                   str_detect(property_type, 'Treehouse') ~ 'outdoor',
+                                   str_detect(property_type, 'Tipi') ~ 'outdoor',
+                                   str_detect(property_type, 'Campsite') ~ 'outdoor',
+                                   str_detect(property_type, 'Cave') ~ 'outdoor',
+                                   str_detect(property_type, 'Entire condo') ~ 'condo_apartment',
+                                   str_detect(property_type, 'Entire loft') ~ 'condo_apartment',
+                                   str_detect(property_type, 'Entire serviced apartment') ~ 'condo_apartment',
+                                   str_detect(property_type, 'Entire rental unit') ~ 'condo_apartment',
+                                   str_detect(property_type, 'Entire home/apt') ~ 'condo_apartment',
+                                   str_detect(property_type, 'Entire') ~ 'house',
+                                   str_detect(property_type, 'Tiny home') ~ 'house',
+                                   TRUE ~ 'other'))
+
+table(df_listings$property_type_clean)
+```
+
+##Downtown Categorization
+
+```{r}
+#Categorizes proximity of zip code to downtown
+#0: Not Downtown or Downtown adjacent
+#1: Downtown Adjacent 
+#2: Actual Downtown
+
+df_listings <- df_listings %>% 
+  mutate(downtown = case_when(zip_code == 78701 ~ 2,
+                              zip_code == 78712 ~ 1,
+                              zip_code == 78702 ~ 1, 
+                              zip_code == 78703 ~ 1, 
+                              zip_code == 78704 ~ 1,
+                              TRUE ~ 0))
+
+ table(df_listings$downtown)     
+```
+
+##Cleaning Host Verificaiton
+
+```{r host_verification}
+#Sets any NA values in host_identity_verified to 0 (assumption is that N/A also means that the identity was not verified)
+df_listings$host_identity_verified[is.na(df_listings$host_identity_verified)] <- 0
+```
+
+
+##Exploratory Data Analysis
+Looking at the summary statistics of a few variables (price, accomodates, bathrooms, and bedrooms), we can see that the values make sense. It is worthy to note that the spread of the values from q95 to max is significant. This indicates that we have outliers which could later impact our regression analysis and prediction model. 
+
+```{r EDA1}
+#Looks at the quantiles, medians, and means of price, accomodates, bathrooms, and bedrooms variables
+
+df.sum <- df_listings %>%
+  select(price, accommodates, bathrooms, bedrooms) %>% # select variables to summarise
+  summarise_each(funs(min = min, 
+                      q25 = quantile(., 0.25), 
+                      median = median, 
+                      q75 = quantile(., 0.75),
+                      q95 = quantile(., 0.95),  
+                      max = max,
+                      mean = mean, 
+                      sd = sd))
+
+df.stats.tidy <- df.sum %>% gather(stat, val) %>%
+  separate(stat, into = c("var", "stat"), sep = "_") %>%
+  spread(stat, val) %>%
+  select(var, min, q25, median, q75, q95, max, mean, sd)
+
+print(df.stats.tidy)
+
+print(paste('Total Data Rows: ', nrow(df_listings)))
+```
+
+Focusing on price, 2 standard deviations above the mean is 578. Note that q95 of price is 604 meaning that atleast 5% of the 16396 data points are above 2 standard deviations of the mean.
+
+Now we compare look at the same variables but we group by property type. First, we see most of the property types are apartment/condos, houses, and private rooms. We also see differences in the median/mean and the quantile values for all property types.
+
+```{r EDA2}
+df.sum.grouped <- df_listings %>%
+  group_by(property_type_clean) %>%
+  select(price, accommodates, bathrooms, bedrooms) %>% # select variables to summarise
+  summarise_each(funs(min = min, 
+                      q25 = quantile(., 0.25), 
+                      median = median, 
+                      q75 = quantile(., 0.75),
+                      q95 = quantile(., 0.95),  
+                      max = max,
+                      mean = mean, 
+                      sd = sd,
+                      n=n()))
+
+t(df.sum.grouped)
+```
+
+Looking at the typical number of reviews listings generally have. We see most listings have few ratings (more than 25% of listings have 0 or 1 rating). There seem to be some outliers that have an extremely high number of ratings (most likely correlated with the variable host_is_superhost)
+
+```{r EDA3}
+df_listings %>%
+  summarize(min = min(number_of_reviews),
+            q25 = quantile(number_of_reviews, 0.25),
+            median = median(number_of_reviews),
+            q75 = quantile(number_of_reviews, 0.75),
+            q95 = quantile(number_of_reviews, 0.95),
+            max = max(number_of_reviews),
+            mean = mean(number_of_reviews),
+            sd = sd(number_of_reviews)
+          )
+```
+
+Histograms of the variables of interest show that all of our variables are skewed right (except review_score_rating which is skewed left). This shows that the majority of our data points are concentrated on the lower end of the values that our variables could take (such as over 50% of our data points only have 1 bathroom). Also worthy of note is that prices exhibit discontinuous behavior. We guess that this is because people who are listing tend to choose prices that are round numbers of close to round numbers such as prices close to 150, 175, 200. The spikes in the count of prices tend to occur in increments of 25. 
+
+```{r EDA4}
+hist_price = ggplot(df_listings) + 
+  geom_histogram(aes(x = price), bins=75)
+
+hist_accommodates = ggplot(df_listings) + 
+  geom_histogram(aes(x = accommodates), bins=16)
+
+hist_bedrooms = ggplot(df_listings) + 
+  geom_histogram(aes(x = bedrooms), bins=11)
+
+hist_bathrooms = ggplot(df_listings) + 
+  geom_histogram(aes(x = bathrooms), bins=16)
+
+hist_num_reviews = ggplot(df_listings) + 
+  geom_histogram(aes(x = number_of_reviews), bins=30)
+
+hist_review_scores = ggplot(df_listings) + 
+  geom_histogram(aes(x = review_scores_rating), bins=30)
+
+hist_price / hist_accommodates
+hist_bedrooms / hist_bathrooms
+hist_num_reviews / hist_review_scores
+```
+
+**Observations for all Boxplots:** Although the majority of listings seem to be concentrated below the $250 price point there seems to be a listing almost at every price point for bedrooms, bathrooms, acommodates. This is an indication that some other factor is driving the price of a listing, could be location or ammenities such as a pool, jacuzzi, etc.
+
+As expected, the median price seems to increase with the number of bedrooms and bathrooms and the relationship seems approximately linear. However, note that once we reach more than 7 bedrooms or more than 5 bathrooms, we see significantly fewer data points which could bias our results.
+
+```{r EDA5}
+#Boxplot and Scatterplot for price vs (bedrooms and bathrooms)
+
+box1 = ggplot(df_listings, aes(x = factor(bedrooms), y = price)) + 
+  geom_boxplot() + geom_smooth(method = lm, aes(group=1))
+
+p1 = ggplot(df_listings) + 
+  geom_point(aes(x = bedrooms, y = price)) 
+
+box2 = ggplot(df_listings, aes(x = factor(bathrooms), y = price)) + 
+  geom_boxplot() + geom_smooth(method = lm, aes(group=1))
+
+p2 = ggplot(df_listings) + 
+  geom_point(aes(x = bathrooms, y = price))
+
+box1 / p1
+box2 / p2
+```
+
+We can see that the median price also seems to increase with the number of people a listing can accomodate. The relationship also seems somewhat linear. 
+
+```{r EDA6}
+#Boxplot and Scatterplot for price vs accomodates
+
+box3 = ggplot(df_listings, aes(x = factor(accommodates), y = price)) + 
+  geom_boxplot() + geom_smooth(method = lm, aes(group=1))
+
+p3 = ggplot(df_listings) + 
+  geom_point(aes(x = accommodates, y = price))
+
+box3 / p3
+```
+
+```{r EDA7}
+#Boxplot and Scatterplot for price vs property_type_cleaned
+
+box4 = ggplot(df_listings) + 
+  geom_boxplot(aes(x = factor(property_type_clean), y = price)) +
+  theme(axis.text.x = element_text(angle = 45))
+
+p4 = ggplot(df_listings) + 
+  geom_point(aes(x = factor(property_type_clean), y = price)) +
+  theme(axis.text.x = element_text(angle = 45))
+
+box4 / p4
+```
+
+As expected, as properties get close to downtown, prices tend to increase. Interesting here is that although downtown listings have higher median prices, it has less values for prices on the very high end potnentially due to the limited size of listings downtown or lower number of observations compared to the other locations.
+
+```{r EDA8}
+#Boxplot and Scatterplot for price vs downtown
+#0: Not Downtown or Downtown Adjacent 
+#1: Downtown Adjacent
+#2: Actual Downtown
+
+box5 = ggplot(df_listings) + 
+  geom_boxplot(aes(x = factor(downtown), y = price)) 
+
+p5 = ggplot(df_listings, aes(x = factor(downtown), y = price)) + 
+  geom_point() 
+
+box5 / p5
+
+table(df_listings$downtown) 
+```
+It is interesting that number_of_reviews has a slight negative correlation with price. It may be because expensive listings tend to have less people book them and thus have less reviews.
+```{r EDA9}
+#Scatterplot for price vs (number_of_reviews and review_scores_rating)
+
+p6 = ggplot(df_listings, aes(x = number_of_reviews, y = price)) + 
+  geom_point() + geom_smooth(method = lm)
+
+p7 = ggplot(df_listings, aes(x = review_scores_rating, y = price)) + 
+  geom_point() + geom_smooth(method = lm)
+
+p6 / p7
+```
+
+```{r EDA10}
+#Correlation Matrix for Reference (note: we are not choosing variables for regression based on this) 
+#Only for referece to look at potentially odd correlations
+
+price_cor <- data.frame(cor(df_listings[,unlist(lapply(df_listings, is.numeric))]))[13,]
+
+price_cor <- t(price_cor)
+price_cor <- na.omit(price_cor)
+price_cor <- data.frame(price_cor)
+
+price_cor %>% arrange(desc(price))
+```
+
+```{r EDA11}
+#Price vs. median_price_SQFT for small (1 person) and large (12 person) listings
+df_listings %>% filter(accommodates == 1  | accommodates == 12) %>%
+  ggplot(aes(x=median_price_SQFT, y=price)) + 
+  geom_point(alpha = .8, aes(color=factor(accommodates))) + 
+  scale_color_viridis_d() + 
+  labs(x='Median $ per SQFT.', y='Price', color = 'Accommodates')
+
+  #Use viridis color scheme
+
+```
+
+```{r EDA12}
+#Cooks Distance
+acc_fit = lm(price ~ accommodates, data = df_listings)
+bath_fit = lm(price ~ bathrooms, data = df_listings)
+bedroom_fit = lm(price ~ bedrooms, data = df_listings)
+beds_fit = lm(price ~ beds, data = df_listings)
+
+#A a general rule of thumb is that any point with a cook's distance
+#over 4/n is considered an outlier
+4/nrow(df_listings)
+plot(cooks.distance(bedroom_fit)) + abline(h=4/nrow(df_listings), col = 'red')
+```
+
+
+##Functions for SLR Diagnostics
+
+```{r diag_functions_and_model_summary}
+#########################################
+#Simple Model Summary Function
+#########################################
+model_summaries <- function(data, xvar, yvar){
+  xvar = enquo(arg = xvar)
+  yvar = enquo(arg = yvar)
+  #create new df to work from to not affect original data
+  new.df <- data %>% 
+    select(!!xvar, !!yvar) %>%
+    mutate(observation = 1:nrow(data))
+  name_list = names(new.df)
+
+#linear
+  linear.model = lm(unlist(new.df[2])~unlist(new.df[1]), data=new.df)
+  print('Linear Model')
+  print(summary(linear.model))
+  print(' ')
+  print(' ')
+#squared
+  squared.model = lm(unlist(new.df[2])~poly((unlist(new.df[1])), 2), data=new.df)
+  print('Squared Model')
+  print(summary(squared.model))
+  print(' ')
+  print(' ')
+#cubic
+  cubic.model = lm(unlist(new.df[2])~poly((unlist(new.df[1])), 3), data=new.df)
+  print('Cubic Model')
+  print(summary(cubic.model))
+  print(' ')
+  print(' ')
+#spline
+  print('Spline Model')
+  spline.model = gam(unlist(new.df[2])~s(unlist(new.df[1])), data=new.df)
+  print(summary(spline.model))
+  print(' ')
+  print(' ')
+}
+
+
+########################################
+#Diagnostics Function for Linear Models
+########################################
+linear_diagnostics <- function(data, xvar, yvar){
+  
+  
+  xvar = enquo(arg = xvar)
+  yvar = enquo(arg = yvar)
+  #create new df to work from to not affect original data
+  new.df <- data %>% 
+    select(!!xvar, !!yvar) %>%
+    mutate(observation = 1:nrow(data))
+  name_list = names(new.df)
+
+
+  lm.model = lm(unlist(new.df[2])~unlist(new.df[1]), data=new.df)
+
+  print(summary(lm.model))
+  
+  # Tack the residuals onto our dataset
+  new.df = new.df %>% mutate(resids = resid(lm.model),
+                       stdresids = rstandard(lm.model))
+  
+  # Linear Regression Visualization
+  p <-ggplot(aes(x=unlist(new.df[1]), y=!!yvar), data=new.df) + 
+    geom_point(alpha = 0.6) + 
+    geom_smooth(method="lm") + xlab(name_list[1]) + ggtitle(paste0(name_list[1], ' Regressed to Price'))
+
+  print(p)
+  
+  # Always plot residuals vs. predictor variable
+  # We're looking for nonlinear trends -- indicating E(e_i|X) != 0 --
+  # and for patterns in the spread indicating Var(e_i|X) isn't constant
+  q <- ggplot(aes(x=unlist(new.df[1]), y=resids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Residuals vs ', name_list[1]))
+  print(q)
+  
+  r <- ggplot(aes(x=unlist(new.df[1]), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Standardized Residuals vs ', name_list[1]))
+  print(r)
+  
+   #Dated absolute residuals
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  
+  # Plotting successive residuals against each other
+  # head() and tail() here are used to get "every day except the last"
+  # and "every day except the first", respectively
+  # see help(head)
+  lag_df = data.frame(resid.today =head(rstandard(lm.model),-1),
+                      resid.tomorrow = tail(rstandard(lm.model),-1))
+  
+  print(cor(lag_df$resid.today, lag_df$resid.tomorrow))  
+  
+  y <- ggplot(aes(x=resid.today, y=resid.tomorrow), data=lag_df) +
+    geom_point() + 
+    geom_smooth()
+  print(y)
+
+
+
+
+  # Always plot residuals^2 vs.
+  # predictor variable
+  # It's easier to read off trends in the spread of the residuals here -- remember,
+  # the expected residual should be zero so the level here should be constant
+  s <- ggplot(aes(x=unlist(new.df[1]), y=resids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Squared Residuals vs ', name_list[1]))
+  print(s)
+  
+  t <- ggplot(aes(x=unlist(new.df[1]), y=stdresids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Squared Standardized Residuals vs ', name_list[1]))
+  print(t)
+  
+  # Those plots are sensitive to outliers, let's try absolute values
+  u <- ggplot(aes(x=unlist(new.df[1]), y=abs(resids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(resids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Residuals vs ', name_list[1]))
+  print(u)
+  
+  v <- ggplot(aes(x=unlist(new.df[1]), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(stdresids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Standardized Residuals vs ', name_list[1]))
+  print(v)
+  
+  # Always plot distribution of residuals
+  w <- ggplot(aes(x=stdresids), data=new.df) + 
+    geom_histogram(aes(y=..density..), bins=30) + 
+    stat_function(fun = dnorm, args = list(mean = 0, sd = 1), col='blue') + ggtitle(paste0('Distribution of Residuals from ', name_list[1]))
+  print(w)
+  
+  ## ----qqplot-of-residuals, echo=FALSE-------------------------------------
+  # An alternative: plot observed quantiles vs. theoretical Gaussian quantiles
+  qqnorm(residuals(lm.model))
+  qqline(residuals(lm.model))
+  
+  qqnorm(rstandard(lm.model))
+  qqline(rstandard(lm.model))
+}
+
+
+##########################################
+#Diagnostics Function for Squared Models
+##########################################
+quad_diagnostics <- function(data, xvar, yvar){
+  
+  
+  xvar = enquo(arg = xvar)
+  yvar = enquo(arg = yvar)
+  #create new df to work from to not affect original data
+  new.df <- data %>% 
+    select(!!xvar, !!yvar) %>%
+    mutate(observation = 1:nrow(data))
+  name_list = names(new.df)
+
+
+  lm.model = lm(unlist(new.df[2])~poly((unlist(new.df[1])), 2), data=new.df)
+
+  print(summary(lm.model))
+  
+  # Tack the residuals onto our dataset
+  new.df = new.df %>% mutate(resids = resid(lm.model),
+                       stdresids = rstandard(lm.model))
+  
+  # Regression Visualization
+  p <-ggplot(aes(x=unlist(new.df[1]), y=!!yvar), data=new.df) + 
+    geom_point(alpha = 0.6) + 
+    geom_smooth(method="lm", formula = y ~ poly(x, 2)) + xlab(name_list[1]) + ggtitle(paste0(name_list[1], ' Regressed to Price'))
+
+  print(p)
+
+
+  # Always plot residuals vs. predictor variable
+  # We're looking for nonlinear trends -- indicating E(e_i|X) != 0 --
+  # and for patterns in the spread indicating Var(e_i|X) isn't constant
+  q <- ggplot(aes(x=unlist(new.df[1]), y=resids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Residuals vs ', name_list[1]))
+  print(q)
+  
+  r <- ggplot(aes(x=unlist(new.df[1]), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Standardized Residuals vs ', name_list[1]))
+  print(r)
+  
+   #Dated absolute residuals
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  
+  # Plotting successive residuals against each other
+  # head() and tail() here are used to get "every day except the last"
+  # and "every day except the first", respectively
+  # see help(head)
+  lag_df = data.frame(resid.today =head(rstandard(lm.model),-1),
+                      resid.tomorrow = tail(rstandard(lm.model),-1))
+
+  print(cor(lag_df$resid.today, lag_df$resid.tomorrow))  
+  
+  y <- ggplot(aes(x=resid.today, y=resid.tomorrow), data=lag_df) +
+    geom_point() + 
+    geom_smooth()
+  print(y)
+
+
+
+
+  # Always plot residuals^2 vs.
+  # predictor variable
+  # It's easier to read off trends in the spread of the residuals here -- remember,
+  # the expected residual should be zero so the level here should be constant
+  s <- ggplot(aes(x=unlist(new.df[1]), y=resids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + geom_hline(aes(yintercept=mean(resids^2), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Squared Residuals vs ', name_list[1]))
+  print(s)
+  
+  t <- ggplot(aes(x=unlist(new.df[1]), y=stdresids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + geom_hline(aes(yintercept=mean(stdresids^2), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Squared Standardized Residuals vs ', name_list[1]))
+  print(t)
+  
+  # Those plots are sensitive to outliers, let's try absolute values
+  u <- ggplot(aes(x=unlist(new.df[1]), y=abs(resids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(resids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Residuals vs ', name_list[1]))
+  print(u)
+  
+  v <- ggplot(aes(x=unlist(new.df[1]), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(stdresids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Standardized Residuals vs ', name_list[1]))
+  print(v)
+  
+  # Always plot distribution of residuals
+  w <- ggplot(aes(x=stdresids), data=new.df) + 
+    geom_histogram(aes(y=..density..), bins=30) + 
+    stat_function(fun = dnorm, args = list(mean = 0, sd = 1), col='blue') + ggtitle(paste0('Distribution of Residuals from ', name_list[1]))
+  print(w)
+  
+  ## ----qqplot-of-residuals, echo=FALSE-------------------------------------
+  # An alternative: plot observed quantiles vs. theoretical Gaussian quantiles
+  qqnorm(residuals(lm.model))
+  qqline(residuals(lm.model))
+  
+  qqnorm(rstandard(lm.model))
+  qqline(rstandard(lm.model))
+}
+
+##########################################
+#Diagnostics Function for Cubic Models
+##########################################
+cubic_diagnostics <- function(data, xvar, yvar){
+  
+  
+  xvar = enquo(arg = xvar)
+  yvar = enquo(arg = yvar)
+  #create new df to work from to not affect original data
+  new.df <- data %>% 
+    select(!!xvar, !!yvar) %>%
+    mutate(observation = 1:nrow(data))
+  name_list = names(new.df)
+
+
+  lm.model = lm(unlist(new.df[2])~poly((unlist(new.df[1])), 3), data=new.df)
+
+  print(summary(lm.model))
+  
+  # Tack the residuals onto our dataset
+  new.df = new.df %>% mutate(resids = resid(lm.model),
+                       stdresids = rstandard(lm.model))
+  
+  # Regression Visualization
+  p <-ggplot(aes(x=unlist(new.df[1]), y=!!yvar), data=new.df) + 
+    #geom_point(alpha = 0.6) + 
+    #geom_smooth(method="lm", formula = y ~ poly(x, 3)) + xlab(name_list[1]) + ggtitle(paste0(name_list[1], ' Regressed to Price'))
+
+  print(p)
+
+  
+  # Always plot residuals vs. predictor variable
+  # We're looking for nonlinear trends -- indicating E(e_i|X) != 0 --
+  # and for patterns in the spread indicating Var(e_i|X) isn't constant
+  q <- ggplot(aes(x=unlist(new.df[1]), y=resids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Residuals vs ', name_list[1]))
+    print(q)
+  
+  r <- ggplot(aes(x=unlist(new.df[1]), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Standardized Residuals vs ', name_list[1]))
+  print(r)
+  
+   #Dated absolute residuals
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  
+  # Plotting successive residuals against each other
+  # head() and tail() here are used to get "every day except the last"
+  # and "every day except the first", respectively
+  # see help(head)
+  lag_df = data.frame(resid.today =head(rstandard(lm.model),-1),
+                      resid.tomorrow = tail(rstandard(lm.model),-1))
+  
+  print(cor(lag_df$resid.today, lag_df$resid.tomorrow))
+
+  y <- ggplot(aes(x=resid.today, y=resid.tomorrow), data=lag_df) +
+    geom_point() + 
+    geom_smooth()
+  print(y)
+
+
+
+
+  # Always plot residuals^2 vs.
+  # predictor variable
+  # It's easier to read off trends in the spread of the residuals here -- remember,
+  # the expected residual should be zero so the level here should be constant
+  s <- ggplot(aes(x=unlist(new.df[1]), y=resids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + geom_hline(aes(yintercept=mean(resids^2), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Squared Residuals vs ', name_list[1]))
+  print(s)
+  
+  t <- ggplot(aes(x=unlist(new.df[1]), y=stdresids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + geom_hline(aes(yintercept=mean(stdresids^2), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Squared Standardized Residuals vs ', name_list[1]))
+  print(t)
+  
+  # Those plots are sensitive to outliers, let's try absolute values
+  u <- ggplot(aes(x=unlist(new.df[1]), y=abs(resids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(resids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Residuals vs ', name_list[1]))
+  print(u)
+  
+  v <- ggplot(aes(x=unlist(new.df[1]), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(stdresids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Standardized Residuals vs ', name_list[1]))
+  print(v)
+  
+  # Always plot distribution of residuals
+  w <- ggplot(aes(x=stdresids), data=new.df) + 
+    geom_histogram(aes(y=..density..), bins=30) + 
+    stat_function(fun = dnorm, args = list(mean = 0, sd = 1), col='blue') + ggtitle(paste0('Distribution of Residuals from ', name_list[1]))
+  print(w)
+  
+  ## ----qqplot-of-residuals, echo=FALSE-------------------------------------
+  # An alternative: plot observed quantiles vs. theoretical Gaussian quantiles
+  qqnorm(residuals(lm.model))
+  qqline(residuals(lm.model))
+  
+  qqnorm(rstandard(lm.model))
+  qqline(rstandard(lm.model))
+}
+
+##########################################
+#Diagnostics Function for Spline Models
+##########################################
+spline_diagnostics <- function(data, xvar, yvar){
+  
+  
+  xvar = enquo(arg = xvar)
+  yvar = enquo(arg = yvar)
+  #create new df to work from to not affect original data
+  new.df <- data %>% 
+    select(!!xvar, !!yvar) %>%
+    mutate(observation = 1:nrow(data))
+  name_list = names(new.df)
+
+
+  lm.model = gam(unlist(new.df[2])~s(unlist(new.df[1])), data=new.df)
+
+  print(summary(lm.model))
+
+  
+  # Tack the residuals onto our dataset
+  new.df = new.df %>% mutate(resids = residuals(lm.model, type = 'response'),
+                       stdresids = (resids/sd(resids)))
+
+  
+  # Linear Regression Visualization
+  p <-ggplot(aes(x=unlist(new.df[1]), y=!!yvar), data=new.df) + 
+    geom_point(alpha = 0.6) + 
+    geom_smooth(method="gam") + xlab(name_list[1]) + ggtitle(paste0(name_list[1], ' Regressed to Price'))
+
+  print(p)
+  
+  # Always plot residuals vs. predictor variable
+  # We're looking for nonlinear trends -- indicating E(e_i|X) != 0 --
+  # and for patterns in the spread indicating Var(e_i|X) isn't constant
+  q <- ggplot(aes(x=unlist(new.df[1]), y=resids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Residuals vs ', name_list[1]))
+  print(q)
+  
+  r <- ggplot(aes(x=unlist(new.df[1]), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + xlab(name_list[1]) + ggtitle(paste0('Standardized Residuals vs ', name_list[1]))
+  print(r)
+  
+   #Dated absolute residuals
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=stdresids), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  x <- ggplot(aes(x=as.Date(observation,origin="1993-12-31"), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(yintercept=0, col='red')
+  print(x)
+  
+  # Plotting successive residuals against each other
+  # head() and tail() here are used to get "every day except the last"
+  # and "every day except the first", respectively
+  # see help(head)
+  lag_df = data.frame(resid.today =head(new.df$stdresids,-1),
+                      resid.tomorrow = tail(new.df$stdresids,-1))
+  
+  print(cor(lag_df$resid.today, lag_df$resid.tomorrow))
+
+  y <- ggplot(aes(x=resid.today, y=resid.tomorrow), data=lag_df) +
+    geom_point() + 
+    geom_smooth()
+  print(y)
+
+
+
+
+  # Always plot residuals^2 vs.
+  # predictor variable
+  # It's easier to read off trends in the spread of the residuals here -- remember,
+  # the expected residual should be zero so the level here should be constant
+  s <- ggplot(aes(x=unlist(new.df[1]), y=resids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + geom_hline(aes(yintercept=mean(resids^2), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Squared Residuals vs ', name_list[1]))
+  print(s)
+  
+  t <- ggplot(aes(x=unlist(new.df[1]), y=stdresids^2), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + geom_hline(aes(yintercept=mean(stdresids^2), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Squared Standardized Residuals vs ', name_list[1]))
+  print(t)
+  
+  # Those plots are sensitive to outliers, let's try absolute values
+  u <- ggplot(aes(x=unlist(new.df[1]), y=abs(resids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(resids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Residuals vs ', name_list[1]))
+  print(u)
+  
+  v <- ggplot(aes(x=unlist(new.df[1]), y=abs(stdresids)), data=new.df) + 
+    geom_point() + 
+    geom_smooth() + 
+    geom_hline(aes(yintercept=mean(abs(stdresids)), col='red')) + xlab(name_list[1]) + ggtitle(paste0('Absolute Value Standardized Residuals vs ', name_list[1]))
+  print(v)
+  
+  # Always plot distribution of residuals
+  w <- ggplot(aes(x=stdresids), data=new.df) + 
+    geom_histogram(aes(y=..density..), bins=30) + 
+    stat_function(fun = dnorm, args = list(mean = 0, sd = 1), col='blue') + ggtitle(paste0('Distribution of Residuals from ', name_list[1]))
+  print(w)
+  
+  ## ----qqplot-of-residuals, echo=FALSE-------------------------------------
+  # An alternative: plot observed quantiles vs. theoretical Gaussian quantiles
+  qqnorm(residuals(lm.model))
+  qqline(residuals(lm.model))
+  
+  qqnorm(rstandard(lm.model))
+  qqline(rstandard(lm.model))
+}
+```
+
+##DF Numeric Only
+
+```{r num_df}
+num.df.listings <- df_listings[,unlist(lapply(df_listings, is.numeric))] %>% na.omit() %>% subset(beds<50) %>% select(c(beds, bedrooms, accommodates, number_of_reviews, review_scores_rating, price))
+names(num.df.listings)
+
+num.column.names = c('accommodates', 'beds', 'bedrooms', 'median_price_SQFT', 'total_listing_count', 'number_of_reviews', 'review_scores_rating') 
+```
+
+##Simple Regression: Price v. Accommodates
+
+``` {r accommodates_models}
+model_summaries(num.df.listings, accommodates, price)
+```
+
+For accomodations, there is no numerical benefit given by using a model that is more complicated than a linear model as far as R^2, residual standard deviation, or the p-values for any coefficients.
+
+```{r accomodates_diag}
+linear_diagnostics(num.df.listings, accommodates, price)
+```
+
+Based on the diagnostics, the residuals appear to show a sort of non-linear trend, however this is not necessarily supported by the other types of models and their summary statistics.  As a result, this could be due to a concentration of data some levels of accommodates and limited data at the low and high quartiles.  There is, in particular a lack of data at the low end of the number of accommodates, which shows the strongest part of the non-linear trend and so this viual mat be attributed to this.  The residuals to increase toward the higher end of accomodations, indicating heteroskedacisity. An adjustment factor, such as location could help to fix this.  In general, the residuals do appear to be gaussian, with a slightly longer tail in the positive direction, a bootstrap on the parameters can alleviate this issue.
+The residuals do appear to have a small amount of correlation as the lag plot has some nonlinearity.  The value of the correlation is ~0.1 which could be as a result of the time period during which the data was taken and how prices moved in general across that period. In general, the simplicity of this linear model makes it the best explainer for the relationship between accomodations and price.
+
+###Simple Regression: Price v. Beds
+
+```{r beds_models}
+model_summaries(num.df.listings, beds, price)
+cor(num.df.listings$beds, num.df.listings$accommodates)
+```
+Looking at the models for the relationship between beds and price, it appears to behave similarly to accomodates which makes sense as there is a strong correlation between beds and accomodates (~0.886), as a result of this colinearity, the model behaves the same with relatively similar summary statistics, as such there are not really benefits to justify a more complicated model beyond the linear.
+
+```{r beds_diag}
+linear_diagnostics(num.df.listings, beds, price)
+```
+
+Note:The data has an extreme point of a unit with 55 beds with the second highest being less than 30. As is would be surprising that an airbnb could have this many beds, and would still be incredibly unusual if it did, I am removing this point from the dataset as it strongly affects the diagnostic plots.
+
+Based on the diagnostics, the residuals appear to show a sort of non-linear trend, this is minorly supported by a slight improvement in RSD and R^2 from the squared and cubic models.  
+However, this improvement is very limited and does not justify making the model more complicated as it does not better explain the relationship.  
+
+This could be due to a concentration of data some levels of accomodates and limited data at the high quartile.  
+This lack of data at the high end of the number of beds, which shows the strongest part of the non-linear trend and so this visual may be attributed to this.  The residuals do increase toward the higher end of accomodations, indicating heteroskedacisity. An adjustment factor,  could help to explain whether this comes from beds or another factor .  
+The residuals do appear to be normal in the bulk of the data, following the assumption of gaussian error assumed by the model summary. 
+
+The residuals do appear to have a small amount of correlation as the lag plot has some nonlinearity.  The value of the correlation is ~0.1 which could be as a result of the time period during which the data was taken and how prices moved in general across that period. In general, the simplicity of this linear model makes it the best simple explainer for the relationship between accomodations and price.
+
+###Simple Regression: Price v. Bedrooms
+
+```{r bedrooms_models}
+model_summaries(num.df.listings, bedrooms, price)
+cor(num.df.listings$accommodates, num.df.listings$bedrooms)
+```
+
+Looking at the models for the relationship between bedrooms and price, it appears to behave similarly to accomodates which makes sense as there is a strong correlation between beds and accomodates (~0.862), as a result of this colinearity, the model behaves the same with relatively similar summary statistics, as such there are not really benefits to justify a more complicated model beyond the linear.
+
+```{r bedrooms_diag}
+linear_diagnostics(num.df.listings, bedrooms, price)
+```
+All the things that were explained by the relationship with bedrooms appear to be true as a result, please refer to the write up of that model for interpretation of the diagnostics.
+
+
+###Simple Regression: Price v. Number of Reviews
+
+```{r num_revs_models}
+model_summaries(num.df.listings, number_of_reviews, price)
+```
+There is a very limited improvement across all models from the linear model.  The linear model is the simplest and as a result that may be the best choice for interpretation.  Note, none of the R^2 values for any of the models are (greater than 0.01), as a result this is likely a poor individual predictor of price by itself, but may be important to add to a larger model. 
+
+```{r num_revs_diag}
+linear_diagnostics(num.df.listings, number_of_reviews, price)
+```
+
+The data is highly highly centered to the low end of number of reviews, as such, there is a lot of noise.  In general the model behaves similarly to review_scores_rating and so please refer to that for description of the diagnostics
+
+###Simple Regression: Price v. Review Score Rating
+
+```{r score_models}
+model_summaries(num.df.listings, review_scores_rating, price)
+```
+
+There is a very limited improvement across all models from the linear model.  The linear model is the simplest and as a result that may be the best choice for interpretation.  Note, none of the R^2 values for any of the models are (greater than 0.01), as a result this is likely a poor individual predictor of price by itself, but may be important to add to a larger model. 
+
+```{r score_diag}
+linear_diagnostics(num.df.listings, review_scores_rating, price)
+```
+
+The data is highly highly centered to the high end of review scores, as such, there is a lot of noise elsewhere.  
+
+From a model perspective, the residuals do have an average very close to zero, as would be expected from a good model.  There is a small correlation between lag values of (~0.1) a low correlation is to be expected, and so this is not particularly concerning.  The error does seem homoskedastic with the error at each point in the model hovering around the mean.  The error is far from normal with a strong bias to the positive tail.  If this were used as an individual model, boostrapping could be used to help limit any misinterpretation from the model summary values. 
+
+###Numeric Parameter Correlation Model/Colinearity Reference
+
+```{r NumericParameter}
+
+my_fn <- function(data, mapping, ...){
+  p <- ggplot(data = num.df.listings, mapping = mapping) + 
+    geom_point() + 
+    geom_smooth(formula = y ~ x, method=lm, fill="blue", color="blue", ...)
+  p
+}
+
+
+ggpairs(num.df.listings, title="Numeric Metric Correlation", lower = list(continuous = my_fn))
+
+
+```
